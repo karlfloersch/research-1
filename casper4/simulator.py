@@ -3,7 +3,7 @@
 
 import random
 
-NODE_COUNT = 10
+POOL_SIZE = 10
 BLOCK_TIME = 100
 EPOCH_LENGTH = 5
 AVG_LATENCY = 250
@@ -39,7 +39,7 @@ class Block():
         if not parent:
             self.number = 0
             self.prevhash = 0
-        else:    
+        else:
             self.number = parent.number + 1
             self.prevhash = parent.hash
         self.hash = random.randrange(10**30)
@@ -91,7 +91,10 @@ class Node():
         self.highest_committed_hash = GENESIS.hash
         # Network I am connected to
         self.network = network
-        network.nodes.append(self)
+        # My current validator peers
+        self.current_validators = []
+        # Next validators
+        self.next_validators = []
         # Longest tail from each checkpoint
         self.tails = {GENESIS.hash: GENESIS}
         # Tail that each block belongs to
@@ -133,7 +136,7 @@ class Node():
                 return True
             desc = self.get_checkpoint_parent(desc)
 
-    def get_last_committed_checkpoint(self):    
+    def get_last_committed_checkpoint(self):
         z = len(self.checkpoints) - 1
         while self.score_checkpoint(self.received[self.checkpoints[z]]) < 1:
             z -= 1
@@ -225,7 +228,7 @@ class Node():
             else:
                 break
         print('New checkpoints: %r' % [self.received[b].epoch for b in self.checkpoints])
-    
+
     # Called on receiving a prepare message
     def accept_prepare(self, prepare):
         if self.id == 0:
@@ -239,7 +242,7 @@ class Node():
             self.prepare_count[prepare.blockhash] = {}
         self.prepare_count[prepare.blockhash][prepare.view_source] = self.prepare_count[prepare.blockhash].get(prepare.view_source, 0) + 1
         # If there are enough prepares...
-        if self.prepare_count[prepare.blockhash][prepare.view_source] > (NODE_COUNT * 2) // 3 and \
+        if self.prepare_count[prepare.blockhash][prepare.view_source] > (POOL_SIZE * 2) // 3 and \
                 prepare.blockhash not in self.committable:
             # Mark it as committable
             self.committable[prepare.blockhash] = True
@@ -299,16 +302,24 @@ class Node():
 
     # Called every round
     def tick(self, _time):
-        if self.id == (_time // BLOCK_TIME) % NODE_COUNT and _time % BLOCK_TIME == 0:
+        if self.id == (_time // BLOCK_TIME) % POOL_SIZE and _time % BLOCK_TIME == 0:
             new_block = Block(self.head)
             self.network.broadcast(new_block)
             self.on_receive(new_block)
 
 network = Network(poisson_latency(AVG_LATENCY))
-nodes = [Node(network, i) for i in range(NODE_COUNT)]
+nodes = [Node(network, i) for i in range(POOL_SIZE)]
+node_ids = [node.id for node in nodes]
+validator_set = [node_ids[:len(node_ids)/2], node_ids[len(node_ids)/2:]]
+for node in nodes:
+    node.current_validators = validator_set[0]
+    node.next_validators = validator_set[1]
+    network.nodes.append(node)
+
 for t in range(25000):
     network.tick()
     if t % 1000 == 999:
         print('Heads:', [n.head.number for n in nodes])
-        print('Checkpoints:',  nodes[0].checkpoints)
+        print('Checkpoints:', nodes[0].checkpoints)
         print('Commits:', [nodes[0].commits.get(c, 0) for c in nodes[0].checkpoints])
+        print('Validators:', nodes[0].current_validators)
